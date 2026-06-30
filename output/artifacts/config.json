@@ -1,0 +1,28 @@
+{
+  "root_dir": "/Users/vientu/MACHINE LEARNING/Multilayer Perceptron Regression",
+  "data_path": "/Users/vientu/MACHINE LEARNING/Multilayer Perceptron Regression/multilayer_perceptron_regression/data/kc_house_data.csv",
+  "output_dir": "/Users/vientu/MACHINE LEARNING/Multilayer Perceptron Regression/output",
+  "artifacts_dir": "/Users/vientu/MACHINE LEARNING/Multilayer Perceptron Regression/output/artifacts",
+  "logs_dir": "/Users/vientu/MACHINE LEARNING/Multilayer Perceptron Regression/output/logs",
+  "results_dir": "/Users/vientu/MACHINE LEARNING/Multilayer Perceptron Regression/output/results",
+  "plots_dir": "/Users/vientu/MACHINE LEARNING/Multilayer Perceptron Regression/output/plots",
+  "random_state": 42,
+  "train_ratio": 0.8,
+  "validation_ratio": 0.1,
+  "test_ratio": 0.1,
+  "target_column": "price",
+  "batch_size": 64,
+  "epochs": 150,
+  "learning_rate": 0.0005,
+  "hidden_units": [
+    64
+  ],
+  "dropout": 0.0,
+  "weight_decay": 0.0,
+  "loss_function": "mse",
+  "huber_delta": 1.0,
+  "gradient_clip_norm": 5.0,
+  "patience": 15,
+  "min_delta": 0.0001,
+  "log_transform_target": true
+}

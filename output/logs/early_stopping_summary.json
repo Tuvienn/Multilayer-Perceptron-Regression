@@ -1,0 +1,11 @@
+{
+  "best_loss": 0.06824777285967554,
+  "best_epoch": 34,
+  "patience": 15,
+  "min_delta": 0.0001,
+  "counter": 15,
+  "model_path": "/Users/vientu/MACHINE LEARNING/Multilayer Perceptron Regression/output/artifacts/best_mlp_model.pth",
+  "best_model_saved": true,
+  "restore_best_model": true,
+  "status": "best model saved"
+}

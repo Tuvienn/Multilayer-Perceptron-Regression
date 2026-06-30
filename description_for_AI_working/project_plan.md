@@ -10,13 +10,12 @@ Mục tiêu chính của dự án là xây dựng mô hình **Multilayer Percept
 
 ### **Data Source**
 
-Dataset sử dụng từ Kaggle:
+Dataset sử dụng từ Kaggle: 
+https://www.kaggle.com/datasets/harlfoxem/housesalesprediction?select=kc_house_data.csv
 
-https://www.kaggle.com/datasets/vallabhadattap/kingcountyhousing
 
 ### **Lý do chọn dataset**
 
-Dataset King County Housing phù hợp với bài toán dự đoán giá nhà vì có quy mô tương đối lớn, khoảng **21,613 mẫu dữ liệu**, đủ để huấn luyện, validation và testing mô hình Machine Learning. Bộ dữ liệu chứa nhiều đặc trưng quan trọng ảnh hưởng đến giá nhà như diện tích, số phòng ngủ, số phòng tắm, vị trí, chất lượng nhà, năm xây dựng và tình trạng nhà. Ngoài ra, dữ liệu có ít missing values hơn so với nhiều bộ dữ liệu nhà ở khác, giúp giảm khối lượng tiền xử lý.
 
 ### **Công việc cần thực hiện**
 

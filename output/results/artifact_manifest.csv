@@ -1,0 +1,9 @@
+artifact,path,exists,purpose
+best_mlp_model,/Users/vientu/MACHINE LEARNING/Multilayer Perceptron Regression/output/artifacts/best_mlp_model.pth,True,Best/restored PyTorch MLP model weights
+preprocess_pipeline,/Users/vientu/MACHINE LEARNING/Multilayer Perceptron Regression/output/artifacts/preprocess_pipeline.joblib,True,Fitted sklearn preprocessing pipeline
+config,/Users/vientu/MACHINE LEARNING/Multilayer Perceptron Regression/output/artifacts/config.json,True,Project configuration and hyperparameters
+model_comparison,/Users/vientu/MACHINE LEARNING/Multilayer Perceptron Regression/output/results/model_comparison.csv,True,Metrics for MLP and baseline models
+mlp_predictions,/Users/vientu/MACHINE LEARNING/Multilayer Perceptron Regression/output/results/mlp_predictions.csv,True,Actual and predicted house prices for the test set
+training_log,/Users/vientu/MACHINE LEARNING/Multilayer Perceptron Regression/output/logs/training_log.csv,True,Epoch-level PyTorch training log
+analysis_summary,/Users/vientu/MACHINE LEARNING/Multilayer Perceptron Regression/output/results/analysis_summary.json,True,Phase 22 final analysis summary
+plots_dir,/Users/vientu/MACHINE LEARNING/Multilayer Perceptron Regression/output/plots,True,All generated plots grouped by phase
