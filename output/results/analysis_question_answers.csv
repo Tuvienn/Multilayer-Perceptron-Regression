@@ -1,9 +1,9 @@
 question,answer,evidence
-Which model has the lowest MAE?,Random Forest Regression,"MAE = 84,689.223"
-Which model has the lowest RMSE?,Linear Regression,"RMSE = 285,782.557"
-Which model has the highest R2?,Linear Regression,R2 = 0.623
+Which model has the lowest MAE?,Random Forest Regression,"MAE = 83,181.337"
+Which model has the lowest RMSE?,Linear Regression,"RMSE = 284,927.746"
+Which model has the highest R2?,Linear Regression,R2 = 0.624
 Is MLP better than the baselines?,MLP is not the best by RMSE; Linear Regression has lower RMSE on the test set.,"Compare MLP rank against Linear Regression, Decision Tree and Random Forest."
 Is there an overfitting signal?,potential overfitting,Validation loss is much higher than train loss.
-Which model trains fastest?,Linear Regression,Training time = 0.030860 seconds
-Which model predicts fastest?,Decision Tree Regression,Inference time = 0.000453 seconds
+Which model trains fastest?,Linear Regression,Training time = 0.019228 seconds
+Which model predicts fastest?,Linear Regression,Inference time = 0.000058 seconds
 Which model is most suitable overall?,Linear Regression,"Linear Regression has the lowest RMSE, so it makes fewer large errors on the test set. Final selection should still consider inference time and interpretability."

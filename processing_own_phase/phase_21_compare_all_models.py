@@ -19,7 +19,19 @@ from .table_display import style_colored_table as shared_style_colored_table
 
 
 CORE_METRIC_COLUMNS = ["MAE", "MSE", "RMSE", "R2"]
-TIME_COLUMNS = ["training_time_seconds", "inference_time_seconds"]
+TIME_COLUMNS = [
+    "training_time_seconds",
+    "inference_time_seconds",
+    "inference_time_mean_seconds",
+    "inference_time_std_seconds",
+]
+COUNT_COLUMNS = ["inference_time_repeats"]
+METRIC_LABELS = {
+    "training_time_seconds": "Training time (seconds)",
+    "inference_time_seconds": "Mean inference time (seconds)",
+    "inference_time_mean_seconds": "Mean inference time (seconds)",
+    "inference_time_std_seconds": "Inference time std (seconds)",
+}
 
 
 def style_colored_table(
@@ -63,13 +75,20 @@ def normalize_model_result_columns(df: pd.DataFrame) -> pd.DataFrame:
     """Ensure comparison tables have the same columns and numeric dtypes."""
 
     output_df = df.copy()
+    if "inference_time_mean_seconds" not in output_df.columns and "inference_time_seconds" in output_df.columns:
+        output_df["inference_time_mean_seconds"] = output_df["inference_time_seconds"]
+    if "inference_time_seconds" not in output_df.columns and "inference_time_mean_seconds" in output_df.columns:
+        output_df["inference_time_seconds"] = output_df["inference_time_mean_seconds"]
     for column in TIME_COLUMNS:
+        if column not in output_df.columns:
+            output_df[column] = pd.NA
+    for column in COUNT_COLUMNS:
         if column not in output_df.columns:
             output_df[column] = pd.NA
     if "target_scale" not in output_df.columns:
         output_df["target_scale"] = "not specified"
 
-    for column in CORE_METRIC_COLUMNS + TIME_COLUMNS:
+    for column in CORE_METRIC_COLUMNS + TIME_COLUMNS + COUNT_COLUMNS:
         if column in output_df.columns:
             output_df[column] = pd.to_numeric(output_df[column], errors="coerce")
     return output_df
@@ -91,6 +110,9 @@ def combine_model_results(mlp_metrics_df: pd.DataFrame, comparison_df: pd.DataFr
         "R2",
         "training_time_seconds",
         "inference_time_seconds",
+        "inference_time_mean_seconds",
+        "inference_time_std_seconds",
+        "inference_time_repeats",
         "target_scale",
     ]
     available_columns = [column for column in ordered_columns if column in combined_df.columns]
@@ -139,7 +161,7 @@ def build_best_model_table(model_comparison_df: pd.DataFrame) -> pd.DataFrame:
         ("RMSE", True, "Lower is better; same unit as price"),
         ("R2", False, "Higher is better; explained target variation"),
         ("training_time_seconds", True, "Lower is faster to train"),
-        ("inference_time_seconds", True, "Lower is faster to predict"),
+        ("inference_time_seconds", True, "Lower mean time is faster to predict"),
     ]
     rows = []
     for metric, lower_is_better, meaning in metric_specs:
@@ -184,7 +206,7 @@ def build_comparison_rule_table() -> pd.DataFrame:
             },
             {
                 "rule": "Accuracy and cost",
-                "phase_21_check": "Training time and inference time are kept beside prediction metrics",
+                "phase_21_check": "Training time and mean inference time are kept beside prediction metrics",
             },
         ]
     )
@@ -203,11 +225,12 @@ def plot_metric_bar(
         raise ValueError(f"No non-missing values available for metric: {metric}")
     sorted_df = metric_df.sort_values(metric, ascending=lower_is_better)
     colors = np.where(sorted_df["model"].str.contains("MLP", case=False, na=False), "#2563eb", "#0f766e")
+    metric_label = METRIC_LABELS.get(metric, metric)
     plt.figure(figsize=(9, 5.5))
     plt.bar(sorted_df["model"], sorted_df[metric], color=colors)
-    plt.title(f"Model Comparison by {metric}")
+    plt.title(f"Model Comparison by {metric_label}")
     plt.xlabel("Model")
-    plt.ylabel(metric)
+    plt.ylabel(metric_label)
     plt.xticks(rotation=20, ha="right")
     plt.grid(True, axis="y", color="#cbd5e1", alpha=0.45)
     return _save_plot(config.comparison_plots_dir / f"model_comparison_{metric.lower()}.png")

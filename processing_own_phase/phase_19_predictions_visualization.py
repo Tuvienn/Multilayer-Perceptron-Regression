@@ -163,6 +163,28 @@ def plot_residual_histogram(predictions_df: pd.DataFrame, config: ProjectConfig)
     return _save_plot(config.prediction_plots_dir / "residual_histogram_mlp.png")
 
 
+def plot_residual_histogram_clipped(
+    predictions_df: pd.DataFrame,
+    config: ProjectConfig,
+    lower_percentile: float = 1,
+    upper_percentile: float = 99,
+) -> Path:
+    residuals = predictions_df["actual_price"] - predictions_df["predicted_price"]
+    residuals = pd.to_numeric(residuals, errors="coerce").dropna()
+    lower, upper = np.percentile(residuals, [lower_percentile, upper_percentile])
+    clipped_residuals = residuals[(residuals >= lower) & (residuals <= upper)]
+
+    plt.figure(figsize=(9, 5.5))
+    plt.hist(clipped_residuals, bins=50, color=PLOT_STYLE["histogram"], edgecolor="white")
+    if lower <= 0 <= upper:
+        plt.axvline(0, color="#111827", linewidth=1.5, linestyle="--")
+    plt.title("Residual Histogram Clipped to 1st-99th Percentiles")
+    plt.xlabel("Residual = actual price - predicted price")
+    plt.ylabel("Frequency")
+    _apply_grid()
+    return _save_plot(config.prediction_plots_dir / "residual_histogram_clipped_1_99.png")
+
+
 def build_error_by_price_range(predictions_df: pd.DataFrame, bins: int = 5) -> pd.DataFrame:
     """Aggregate absolute errors by actual price range."""
 
@@ -304,9 +326,10 @@ def plot_training_loss_curve(training_log: pd.DataFrame, config: ProjectConfig) 
     plt.figure(figsize=(9, 5.5))
     plt.plot(training_log["epoch"], training_log["train_loss"], label="train_loss", color="#2563eb", linewidth=2)
     plt.plot(training_log["epoch"], training_log["validation_loss"], label="validation_loss", color="#dc2626", linewidth=2)
-    plt.title("Training Loss and Validation Loss")
+    target_scale = "log-transformed target" if getattr(config, "log_transform_target", False) else "target"
+    plt.title(f"Training and Validation MSE Loss on {target_scale}")
     plt.xlabel("Epoch")
-    plt.ylabel("Loss")
+    plt.ylabel(f"MSE Loss on {target_scale}")
     plt.legend()
     _apply_grid()
     return _save_plot(config.prediction_plots_dir / "training_validation_loss_for_predictions.png")
@@ -382,6 +405,7 @@ def run_phase_19_predictions_visualization(
         "actual_vs_predicted_high_end": plot_actual_vs_predicted_high_end(predictions_df, config),
         "residual_plot": plot_residuals(predictions_df, config),
         "residual_histogram": plot_residual_histogram(predictions_df, config),
+        "residual_histogram_clipped_1_99": plot_residual_histogram_clipped(predictions_df, config),
         "error_by_price_range": error_plot_path,
         "top_20_largest_errors": top_error_plot_path,
     }

@@ -12,6 +12,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 
 from .phase_1_import_library import ProjectConfig
@@ -23,6 +24,7 @@ PLOT_STYLE = {
     "other": "#2563eb",
     "grid": "#cbd5e1",
 }
+DEFAULT_PREDICTION_GUARDRAIL_MULTIPLIER = 3.0
 
 
 def style_colored_table(
@@ -58,6 +60,7 @@ def build_hyperparameter_grid(max_trials: int | None = None) -> list[dict]:
             "batch_size": 128,
             "dropout": 0.10,
             "weight_decay": 1e-5,
+            "l1_lambda": 1e-6,
             "loss_function": "mse",
             "huber_delta": 1.0,
             "gradient_clip_norm": 5.0,
@@ -68,6 +71,7 @@ def build_hyperparameter_grid(max_trials: int | None = None) -> list[dict]:
             "batch_size": 128,
             "dropout": 0.10,
             "weight_decay": 1e-5,
+            "l1_lambda": 1e-6,
             "loss_function": "huber",
             "huber_delta": 1.0,
             "gradient_clip_norm": 5.0,
@@ -78,6 +82,7 @@ def build_hyperparameter_grid(max_trials: int | None = None) -> list[dict]:
             "batch_size": 128,
             "dropout": 0.15,
             "weight_decay": 1e-5,
+            "l1_lambda": 1e-6,
             "loss_function": "huber",
             "huber_delta": 0.75,
             "gradient_clip_norm": 5.0,
@@ -88,6 +93,7 @@ def build_hyperparameter_grid(max_trials: int | None = None) -> list[dict]:
             "batch_size": 64,
             "dropout": 0.20,
             "weight_decay": 1e-4,
+            "l1_lambda": 1e-6,
             "loss_function": "huber",
             "huber_delta": 0.50,
             "gradient_clip_norm": 5.0,
@@ -98,6 +104,7 @@ def build_hyperparameter_grid(max_trials: int | None = None) -> list[dict]:
             "batch_size": 64,
             "dropout": 0.10,
             "weight_decay": 1e-4,
+            "l1_lambda": 1e-6,
             "loss_function": "smooth_l1",
             "huber_delta": 0.75,
             "gradient_clip_norm": 5.0,
@@ -108,6 +115,7 @@ def build_hyperparameter_grid(max_trials: int | None = None) -> list[dict]:
             "batch_size": 128,
             "dropout": 0.20,
             "weight_decay": 1e-4,
+            "l1_lambda": 1e-6,
             "loss_function": "smooth_l1",
             "huber_delta": 0.50,
             "gradient_clip_norm": 5.0,
@@ -118,6 +126,7 @@ def build_hyperparameter_grid(max_trials: int | None = None) -> list[dict]:
             "batch_size": 64,
             "dropout": 0.00,
             "weight_decay": 0.0,
+            "l1_lambda": 1e-6,
             "loss_function": "mse",
             "huber_delta": 1.0,
             "gradient_clip_norm": 5.0,
@@ -128,6 +137,7 @@ def build_hyperparameter_grid(max_trials: int | None = None) -> list[dict]:
             "batch_size": 128,
             "dropout": 0.20,
             "weight_decay": 1e-4,
+            "l1_lambda": 1e-6,
             "loss_function": "huber",
             "huber_delta": 0.75,
             "gradient_clip_norm": 5.0,
@@ -161,6 +171,9 @@ def plot_validation_rmse_by_trial(results_df: pd.DataFrame, config: ProjectConfi
     if results_df.empty or "validation_original_rmse" not in results_df.columns:
         return None
     plot_df = results_df.dropna(subset=["validation_original_rmse"]).copy()
+    if "status" in plot_df.columns:
+        plot_df = plot_df[plot_df["status"].eq("completed")].copy()
+    plot_df = plot_df[np.isfinite(plot_df["validation_original_rmse"].astype(float))].copy()
     if plot_df.empty:
         return None
     plot_df = plot_df.sort_values("validation_original_rmse").reset_index(drop=True)
@@ -201,11 +214,162 @@ def create_pending_hyperparameter_table(config: ProjectConfig, max_trials: int |
     table["validation_original_rmse"] = pd.NA
     table["validation_original_mae"] = pd.NA
     table["validation_original_r2"] = pd.NA
+    table["min_prediction"] = pd.NA
+    table["max_prediction"] = pd.NA
+    table["max_actual"] = pd.NA
+    table["max_reasonable_prediction"] = pd.NA
+    table["non_finite_prediction_count"] = pd.NA
+    table["negative_prediction_count"] = pd.NA
+    table["extreme_high_prediction_count"] = pd.NA
+    table["unstable_reason"] = "-"
     table["best_epoch"] = pd.NA
     table["training_time_seconds"] = pd.NA
     table["status"] = "pending"
     save_hyperparameter_results(table, config)
     return table
+
+
+def build_trial_decision_summary(hyperparameter_table: pd.DataFrame) -> pd.DataFrame:
+    """Build one presentation table that combines ranking and stability decisions."""
+
+    if hyperparameter_table.empty:
+        return pd.DataFrame(
+            [
+                {
+                    "trial": "-",
+                    "decision": "No trials",
+                    "status": "empty",
+                    "note": "No hyperparameter trials available",
+                }
+            ]
+        )
+
+    table = hyperparameter_table.copy()
+    if "status" in table.columns:
+        table["status"] = table["status"].astype(str)
+    else:
+        table["status"] = "pending"
+    if "trial" not in table.columns:
+        table.insert(0, "trial", range(1, len(table) + 1))
+
+    metric_column = "validation_original_rmse" if "validation_original_rmse" in table.columns else "validation_loss"
+    if metric_column in table.columns:
+        table["_ranking_metric"] = pd.to_numeric(table[metric_column], errors="coerce")
+    else:
+        table["_ranking_metric"] = np.nan
+
+    completed_mask = table["status"].eq("completed") & table["_ranking_metric"].notna()
+    completed_ranked = table.loc[completed_mask, ["trial", "_ranking_metric"]].sort_values("_ranking_metric")
+    rank_by_trial = {
+        trial: rank
+        for rank, trial in enumerate(completed_ranked["trial"].tolist(), start=1)
+    }
+
+    rows = []
+    for _, row in table.iterrows():
+        trial = row["trial"]
+        status = str(row.get("status", "pending"))
+        rank = rank_by_trial.get(trial, "-")
+        unstable_reason = str(row.get("unstable_reason", "-"))
+        if status == "completed" and rank == 1:
+            decision = "Best candidate"
+            note = "RMSE thap nhat trong cac trial completed"
+            display_group = 0
+        elif status == "completed":
+            decision = "Valid candidate"
+            note = "Trial hop le, co the so sanh voi best candidate"
+            display_group = 1
+        elif "unstable" in status.lower():
+            decision = "Rejected: unstable prediction"
+            note = unstable_reason if unstable_reason and unstable_reason != "-" else "Du doan bi guardrail danh dau bat on"
+            display_group = 2
+        elif status == "pending":
+            decision = "Pending"
+            note = "Moi la ke hoach, chua co ket qua train"
+            display_group = 3
+        else:
+            decision = "Review"
+            note = "Can xem lai status cua trial"
+            display_group = 4
+
+        rows.append(
+            {
+                "trial": trial,
+                "decision": decision,
+                "status": status,
+                "learning_rate": row.get("learning_rate", pd.NA),
+                "hidden_units": row.get("hidden_units", pd.NA),
+                "batch_size": row.get("batch_size", pd.NA),
+                "dropout": row.get("dropout", pd.NA),
+                "weight_decay": row.get("weight_decay", pd.NA),
+                "loss_function": row.get("loss_function", pd.NA),
+                "validation_original_rmse": row.get("validation_original_rmse", pd.NA),
+                "validation_original_mae": row.get("validation_original_mae", pd.NA),
+                "validation_original_r2": row.get("validation_original_r2", pd.NA),
+                "best_epoch": row.get("best_epoch", pd.NA),
+                "training_time_seconds": row.get("training_time_seconds", pd.NA),
+                "unstable_reason": unstable_reason,
+                "note": note,
+                "_display_group": display_group,
+                "_rank_sort": rank if isinstance(rank, int) else 999,
+            }
+        )
+
+    summary = pd.DataFrame(rows)
+    summary = summary.sort_values(["_display_group", "_rank_sort", "trial"]).reset_index(drop=True)
+    summary = summary.drop(columns=["_display_group", "_rank_sort"])
+    numeric_display_columns = [
+        "validation_original_rmse",
+        "validation_original_mae",
+        "validation_original_r2",
+        "best_epoch",
+        "training_time_seconds",
+    ]
+    for column in numeric_display_columns:
+        if column in summary.columns:
+            summary[column] = pd.to_numeric(summary[column], errors="coerce")
+    return summary
+
+
+def _phase_17_trial_row_style(row: pd.Series) -> list[str]:
+    """Return row-level CSS for the combined Phase 17 trial summary table."""
+
+    decision = str(row.get("decision", "")).lower()
+    if "best candidate" in decision:
+        style = "background-color: #dcfce7; color: #14532d; font-weight: 800;"
+    elif "valid candidate" in decision:
+        style = "background-color: #eff6ff; color: #1e3a8a; font-weight: 700;"
+    elif "unstable" in decision:
+        style = "background-color: #fff1f2; color: #991b1b; font-weight: 700;"
+    elif "pending" in decision:
+        style = "background-color: #f3f4f6; color: #374151;"
+    else:
+        style = "background-color: #fff7ed; color: #9a3412;"
+    return [style for _ in row]
+
+
+def style_phase_17_trial_summary(df: pd.DataFrame, caption: str):
+    """Style the combined Phase 17 table so ranking and rejected trials are easy to see."""
+
+    metric_columns = [
+        column
+        for column in ["validation_original_rmse", "validation_original_mae", "validation_original_r2"]
+        if column in df.columns and pd.to_numeric(df[column], errors="coerce").notna().any()
+    ]
+    emphasized_columns = [column for column in ["decision", "status", "note"] if column in df.columns]
+    return (
+        style_colored_table(
+            df,
+            caption=caption,
+            precision=3,
+            gradient_columns=metric_columns,
+        )
+        .apply(_phase_17_trial_row_style, axis=1)
+        .set_properties(
+            subset=emphasized_columns,
+            **{"font-weight": "800"},
+        )
+    )
 
 
 def build_phase_17_summary(
@@ -222,7 +386,7 @@ def build_phase_17_summary(
                 "total_trials_in_table": len(hyperparameter_table),
                 "ran_experiments": ran_experiments,
                 "results_path": str(results_path),
-                "note": "Completed trials are ranked by validation_original_rmse when available",
+                "note": "One table combines completed ranking, unstable prediction flags, and presentation notes",
             }
         ]
     )
@@ -232,10 +396,12 @@ def build_phase_17_summary(
             {"hyperparameter": "hidden_units", "meaning": "Number of neurons/layers in the MLP"},
             {"hyperparameter": "batch_size", "meaning": "Samples per weight update"},
             {"hyperparameter": "dropout", "meaning": "Regularization to reduce overfitting"},
-            {"hyperparameter": "weight_decay", "meaning": "L2 regularization strength"},
+            {"hyperparameter": "weight_decay", "meaning": "L2 regularization strength in Adam"},
+            {"hyperparameter": "l1_lambda", "meaning": "L1 regularization strength added to the training loss"},
             {"hyperparameter": "loss_function", "meaning": "mse, huber, or smooth_l1 objective"},
             {"hyperparameter": "huber_delta", "meaning": "Transition point for robust losses on log target scale"},
             {"hyperparameter": "gradient_clip_norm", "meaning": "Optional max gradient norm used to stabilize trials"},
+            {"hyperparameter": "prediction_guardrail_multiplier", "meaning": "Flags trials whose original-scale predictions are implausibly high"},
         ]
     )
     completed_df = hyperparameter_table[hyperparameter_table.get("status", "").eq("completed")].copy()
@@ -245,10 +411,21 @@ def build_phase_17_summary(
         ranked_trials = completed_df.sort_values("validation_loss").reset_index(drop=True)
     else:
         ranked_trials = pd.DataFrame([{"trial": "-", "status": "No completed trials yet"}])
+    if "status" in hyperparameter_table.columns:
+        unstable_trials = hyperparameter_table[
+            hyperparameter_table["status"].astype(str).str.contains("unstable", case=False, na=False)
+        ].copy()
+    else:
+        unstable_trials = pd.DataFrame()
+    if unstable_trials.empty:
+        unstable_trials = pd.DataFrame([{"trial": "-", "status": "No unstable prediction trials"}])
+    trial_summary = build_trial_decision_summary(hyperparameter_table)
     summary = {
         "phase_17_overview": overview,
+        "trial_summary": trial_summary,
         "hyperparameter_table": hyperparameter_table,
         "ranked_trials": ranked_trials,
+        "unstable_trials": unstable_trials,
         "created_plots": pd.DataFrame(
             [{"plot_name": name, "saved_path": str(path), "status": "created"} for name, path in (plot_paths or {}).items()]
         )
@@ -262,10 +439,15 @@ def build_phase_17_summary(
 def display_phase_17_summary(summary: dict[str, pd.DataFrame]) -> None:
     """Display Phase 17 summary tables in a notebook, with a plain fallback."""
 
+    if "trial_summary" not in summary and "hyperparameter_table" in summary:
+        summary = {
+            **summary,
+            "trial_summary": build_trial_decision_summary(summary["hyperparameter_table"]),
+        }
+
     sections = [
         ("### Hyperparameter exploration overview", "phase_17_overview", "Phase 17 exploration overview"),
-        ("### Hyperparameter table", "hyperparameter_table", "Pending or completed hyperparameter trials"),
-        ("### Ranked completed trials", "ranked_trials", "Completed trials ranked by validation metric"),
+        ("### Hyperparameter trial summary", "trial_summary", "One table: ranking, decisions, unstable flags and notes"),
         ("### Created hyperparameter plots", "created_plots", "Phase 17 saved plots"),
         ("### Parameter meaning", "parameter_meaning", "What each hyperparameter controls"),
     ]
@@ -279,7 +461,10 @@ def display_phase_17_summary(summary: dict[str, pd.DataFrame]) -> None:
 
     for title, key, caption in sections:
         display(Markdown(title))
-        display(style_colored_table(summary[key], caption))
+        if key == "trial_summary":
+            display(style_phase_17_trial_summary(summary[key], caption))
+        else:
+            display(style_colored_table(summary[key], caption))
 
 
 def run_phase_17_hyperparameter_exploration_plan(
@@ -295,6 +480,71 @@ def run_phase_17_hyperparameter_exploration_plan(
         ran_experiments=False,
     )
     return table, summary
+
+
+def summarize_prediction_guardrails(
+    y_true,
+    y_pred,
+    prediction_guardrail_multiplier: float = DEFAULT_PREDICTION_GUARDRAIL_MULTIPLIER,
+    target_scale: str = "model target scale",
+) -> dict[str, float | int | bool | str]:
+    """Flag hyperparameter trials with implausible original-price predictions."""
+
+    y_true_array = np.asarray(y_true, dtype=float).reshape(-1)
+    y_pred_array = np.asarray(y_pred, dtype=float).reshape(-1)
+    finite_true = y_true_array[np.isfinite(y_true_array)]
+    finite_pred = y_pred_array[np.isfinite(y_pred_array)]
+    max_actual = float(finite_true.max()) if finite_true.size else float("nan")
+    min_prediction = float(finite_pred.min()) if finite_pred.size else float("nan")
+    max_prediction = float(finite_pred.max()) if finite_pred.size else float("nan")
+    max_reasonable_prediction = max_actual * prediction_guardrail_multiplier if np.isfinite(max_actual) else float("nan")
+    non_finite_prediction_count = int((~np.isfinite(y_pred_array)).sum())
+    negative_prediction_count = int((finite_pred < 0).sum()) if finite_pred.size else 0
+    if np.isfinite(max_reasonable_prediction) and finite_pred.size:
+        extreme_high_prediction_count = int((finite_pred > max_reasonable_prediction).sum())
+    else:
+        extreme_high_prediction_count = 0
+
+    reasons = []
+    if non_finite_prediction_count:
+        reasons.append(f"{non_finite_prediction_count} non-finite predictions")
+    if "original price scale" in target_scale and negative_prediction_count:
+        reasons.append(f"{negative_prediction_count} negative price predictions")
+    if "original price scale" in target_scale and extreme_high_prediction_count:
+        reasons.append(
+            f"{extreme_high_prediction_count} predictions above {prediction_guardrail_multiplier:g}x validation max price"
+        )
+    is_unstable = bool(reasons)
+    return {
+        "min_prediction": min_prediction,
+        "max_prediction": max_prediction,
+        "max_actual": max_actual,
+        "max_reasonable_prediction": max_reasonable_prediction,
+        "non_finite_prediction_count": non_finite_prediction_count,
+        "negative_prediction_count": negative_prediction_count,
+        "extreme_high_prediction_count": extreme_high_prediction_count,
+        "is_unstable": is_unstable,
+        "unstable_reason": "; ".join(reasons) if reasons else "-",
+    }
+
+
+def safe_regression_metrics(y_true, y_pred) -> dict[str, float]:
+    """Calculate metrics, returning a clearly bad score for non-finite predictions."""
+
+    y_true_array = np.asarray(y_true, dtype=float).reshape(-1)
+    y_pred_array = np.asarray(y_pred, dtype=float).reshape(-1)
+    finite_mask = np.isfinite(y_true_array) & np.isfinite(y_pred_array)
+    if not finite_mask.any():
+        return {"MAE": float("inf"), "MSE": float("inf"), "RMSE": float("inf"), "R2": float("nan")}
+    y_true_array = y_true_array[finite_mask]
+    y_pred_array = y_pred_array[finite_mask]
+    residuals = y_true_array - y_pred_array
+    mae = float(np.mean(np.abs(residuals)))
+    mse = float(np.mean(residuals**2))
+    rmse = float(np.sqrt(mse))
+    denominator = float(np.sum((y_true_array - np.mean(y_true_array)) ** 2))
+    r2 = float(1 - np.sum(residuals**2) / denominator) if denominator > 0 else float("nan")
+    return {"MAE": mae, "MSE": mse, "RMSE": rmse, "R2": r2}
 
 
 def run_hyperparameter_exploration(
@@ -317,12 +567,15 @@ def run_hyperparameter_exploration(
     from .phase_12_model_configuration import ModelHyperparameters
     from .phase_13_train_mlp_pytorch import train_mlp_pytorch
     from .phase_16_early_stopping import EarlyStopping
-    from .phase_18_evaluate_mlp import predict_mlp, regression_metrics
+    from .phase_18_evaluate_mlp import predict_mlp
 
     train_dataset = create_tensor_dataset(X_train_processed, y_train)
     val_dataset = create_tensor_dataset(X_val_processed, y_val)
     rows: list[dict] = []
     trial_patience = patience_per_trial or min(config.patience, max(5, max_epochs_per_trial // 4))
+    prediction_guardrail_multiplier = float(
+        getattr(config, "prediction_guardrail_multiplier", DEFAULT_PREDICTION_GUARDRAIL_MULTIPLIER)
+    )
     search_artifact_dir = config.artifacts_dir / "hyperparameter_search"
     search_artifact_dir.mkdir(parents=True, exist_ok=True)
 
@@ -347,6 +600,7 @@ def run_hyperparameter_exploration(
             hidden_units=trial_config["hidden_units"],
             dropout=trial_config["dropout"],
             weight_decay=trial_config["weight_decay"],
+            l1_lambda=trial_config["l1_lambda"],
             patience=trial_patience,
             min_delta=config.min_delta,
             loss_function=trial_config["loss_function"],
@@ -369,7 +623,14 @@ def run_hyperparameter_exploration(
             metric_y_true = inverse_transform(validation_y_true)
             metric_y_pred = inverse_transform(validation_y_pred)
             target_scale = "original price scale after inverse transform"
-        validation_metrics = regression_metrics(metric_y_true, metric_y_pred)
+        prediction_guardrails = summarize_prediction_guardrails(
+            metric_y_true,
+            metric_y_pred,
+            prediction_guardrail_multiplier=prediction_guardrail_multiplier,
+            target_scale=target_scale,
+        )
+        validation_metrics = safe_regression_metrics(metric_y_true, metric_y_pred)
+        status = "unstable_prediction" if prediction_guardrails["is_unstable"] else "completed"
         elapsed_time = time.perf_counter() - start_time
         rows.append(
             {
@@ -379,6 +640,7 @@ def run_hyperparameter_exploration(
                 "batch_size": trial_config["batch_size"],
                 "dropout": trial_config["dropout"],
                 "weight_decay": trial_config["weight_decay"],
+                "l1_lambda": trial_config["l1_lambda"],
                 "loss_function": trial_config["loss_function"],
                 "huber_delta": trial_config["huber_delta"],
                 "gradient_clip_norm": trial_config.get("gradient_clip_norm"),
@@ -389,12 +651,20 @@ def run_hyperparameter_exploration(
                 "validation_original_mse": float(validation_metrics["MSE"]),
                 "validation_original_rmse": float(validation_metrics["RMSE"]),
                 "validation_original_r2": float(validation_metrics["R2"]),
+                "min_prediction": float(prediction_guardrails["min_prediction"]),
+                "max_prediction": float(prediction_guardrails["max_prediction"]),
+                "max_actual": float(prediction_guardrails["max_actual"]),
+                "max_reasonable_prediction": float(prediction_guardrails["max_reasonable_prediction"]),
+                "non_finite_prediction_count": int(prediction_guardrails["non_finite_prediction_count"]),
+                "negative_prediction_count": int(prediction_guardrails["negative_prediction_count"]),
+                "extreme_high_prediction_count": int(prediction_guardrails["extreme_high_prediction_count"]),
+                "unstable_reason": str(prediction_guardrails["unstable_reason"]),
                 "training_time_seconds": float(elapsed_time),
                 "validation_inference_time_seconds": float(validation_inference_time),
                 "target_scale": target_scale,
                 "device": device,
                 "best_model_path": str(early_stopping.model_path),
-                "status": "completed",
+                "status": status,
             }
         )
 

@@ -1,10 +1,10 @@
 {
   "best_mae_model": "Random Forest Regression",
-  "best_mae_value": 84689.2226138964,
+  "best_mae_value": 83181.33748860881,
   "best_rmse_model": "Linear Regression",
-  "best_rmse_value": 285782.55691650475,
+  "best_rmse_value": 284927.74646183767,
   "best_r2_model": "Linear Regression",
-  "best_r2_value": 0.622541110312723,
+  "best_r2_value": 0.6244528215178926,
   "mlp_vs_baseline": "MLP is not the best by RMSE; Linear Regression has lower RMSE on the test set.",
   "overfitting_note": "Validation loss is much higher than train loss.",
   "overfitting_status": "potential overfitting",

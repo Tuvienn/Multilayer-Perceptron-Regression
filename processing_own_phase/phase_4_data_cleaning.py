@@ -39,6 +39,7 @@ NUMERIC_COLUMNS = [
     "sqft_lot15",
 ]
 OUTLIER_COLUMNS = ["price", "sqft_living", "bedrooms", "bathrooms"]
+MINIMUM_VALID_PRICE = 10_000.0
 TABLE_STYLES = [
     {
         "selector": "caption",
@@ -109,12 +110,20 @@ def add_date_features(df: pd.DataFrame) -> pd.DataFrame:
     return output_df
 
 
-def get_invalid_value_masks(df: pd.DataFrame, target_column: str = "price") -> dict[str, pd.Series]:
+def get_invalid_value_masks(
+    df: pd.DataFrame,
+    target_column: str = "price",
+    minimum_valid_price: float = MINIMUM_VALID_PRICE,
+) -> dict[str, pd.Series]:
     """Return invalid-value masks by column/rule."""
 
     masks: dict[str, pd.Series] = {}
     if target_column in df.columns:
-        masks[target_column] = df[target_column].notna() & (df[target_column] <= 0)
+        target_values = pd.to_numeric(df[target_column], errors="coerce")
+        masks[f"{target_column}_non_positive"] = target_values.notna() & (target_values <= 0)
+        masks[f"{target_column}_below_minimum_valid_price"] = (
+            target_values.notna() & (target_values > 0) & (target_values < minimum_valid_price)
+        )
 
     invalid_rules = {
         "bedrooms": lambda s: (s <= 0) | (s > 20),
@@ -147,14 +156,23 @@ def get_invalid_value_masks(df: pd.DataFrame, target_column: str = "price") -> d
     return masks
 
 
-def count_invalid_values(df: pd.DataFrame, target_column: str = "price") -> int:
-    return int(sum(mask.sum() for mask in get_invalid_value_masks(df, target_column).values()))
+def count_invalid_values(
+    df: pd.DataFrame,
+    target_column: str = "price",
+    minimum_valid_price: float = MINIMUM_VALID_PRICE,
+) -> int:
+    return int(sum(mask.sum() for mask in get_invalid_value_masks(df, target_column, minimum_valid_price).values()))
 
 
-def handle_invalid_values(df: pd.DataFrame, target_column: str = "price") -> pd.DataFrame:
+def handle_invalid_values(
+    df: pd.DataFrame,
+    target_column: str = "price",
+    minimum_valid_price: float = MINIMUM_VALID_PRICE,
+) -> pd.DataFrame:
     output_df = df.copy()
     if target_column in output_df.columns:
-        output_df = output_df[output_df[target_column].isna() | (output_df[target_column] > 0)].copy()
+        target_values = pd.to_numeric(output_df[target_column], errors="coerce")
+        output_df = output_df[target_values.isna() | (target_values >= minimum_valid_price)].copy()
 
     invalid_rules = {
         "bedrooms": lambda s: (s <= 0) | (s > 20),
@@ -191,12 +209,21 @@ def handle_invalid_values(df: pd.DataFrame, target_column: str = "price") -> pd.
     return output_df
 
 
-def clean_house_data(df: pd.DataFrame, target_column: str = "price", drop_id: bool = True) -> pd.DataFrame:
+def clean_house_data(
+    df: pd.DataFrame,
+    target_column: str = "price",
+    drop_id: bool = True,
+    minimum_valid_price: float = MINIMUM_VALID_PRICE,
+) -> pd.DataFrame:
     output_df = convert_numeric_columns(df)
     output_df = parse_date_column(output_df)
     output_df = add_date_features(output_df)
     output_df = output_df.drop_duplicates().copy()
-    output_df = handle_invalid_values(output_df, target_column=target_column)
+    output_df = handle_invalid_values(
+        output_df,
+        target_column=target_column,
+        minimum_valid_price=minimum_valid_price,
+    )
     if drop_id and "id" in output_df.columns:
         output_df = output_df.drop(columns=["id"])
     return output_df.reset_index(drop=True)
@@ -240,9 +267,68 @@ def build_outlier_table(split_frames: dict[str, tuple[pd.DataFrame, pd.DataFrame
                     "feature": column,
                     "outlier_flags_before": count_outlier_flags(before_audit_df, column),
                     "outlier_flags_after": count_outlier_flags(after_audit_df, column),
-                    "action": "Flag only, not removed automatically",
+                    "action": "Flag only; keep valid outliers for modeling",
+                    "modeling_strategy": "Use log1p target plus L1/L2 regularization instead of deleting valid luxury homes",
                 }
             )
+    return pd.DataFrame(rows)
+
+
+def count_invalid_price_rows(
+    df: pd.DataFrame,
+    target_column: str = "price",
+    minimum_valid_price: float = MINIMUM_VALID_PRICE,
+) -> dict[str, int]:
+    """Count non-positive and suspiciously low target values."""
+
+    if target_column not in df.columns:
+        return {
+            "non_positive_price_rows": 0,
+            "below_minimum_price_rows": 0,
+            "invalid_price_rows": 0,
+        }
+    target_values = pd.to_numeric(df[target_column], errors="coerce")
+    non_positive = target_values.notna() & (target_values <= 0)
+    below_minimum = target_values.notna() & (target_values > 0) & (target_values < minimum_valid_price)
+    invalid_price = non_positive | below_minimum
+    return {
+        "non_positive_price_rows": int(non_positive.sum()),
+        "below_minimum_price_rows": int(below_minimum.sum()),
+        "invalid_price_rows": int(invalid_price.sum()),
+    }
+
+
+def build_price_validity_table(
+    split_frames: dict[str, tuple[pd.DataFrame, pd.DataFrame]],
+    target_column: str = "price",
+    minimum_valid_price: float = MINIMUM_VALID_PRICE,
+) -> pd.DataFrame:
+    """Summarize invalid target-price rows removed during cleaning."""
+
+    rows = []
+    for split, (before_df, after_df) in split_frames.items():
+        before_counts = count_invalid_price_rows(
+            prepare_for_audit(before_df),
+            target_column=target_column,
+            minimum_valid_price=minimum_valid_price,
+        )
+        after_counts = count_invalid_price_rows(
+            prepare_for_audit(after_df),
+            target_column=target_column,
+            minimum_valid_price=minimum_valid_price,
+        )
+        rows.append(
+            {
+                "split": split,
+                "minimum_valid_price": minimum_valid_price,
+                "non_positive_before": before_counts["non_positive_price_rows"],
+                "below_minimum_before": before_counts["below_minimum_price_rows"],
+                "invalid_price_rows_before": before_counts["invalid_price_rows"],
+                "invalid_price_rows_after": after_counts["invalid_price_rows"],
+                "action": f"Remove rows where {target_column} is positive but below {minimum_valid_price:,.0f}, or non-positive",
+                "reason": "Very low target prices such as 0 or 5000 are treated as data-entry errors, not valid outliers",
+            }
+        )
     return pd.DataFrame(rows)
 
 
@@ -251,6 +337,7 @@ def summarize_cleaning_split(
     before_df: pd.DataFrame,
     after_df: pd.DataFrame,
     target_column: str = "price",
+    minimum_valid_price: float = MINIMUM_VALID_PRICE,
 ) -> dict[str, Any]:
     before_audit_df = prepare_for_audit(before_df)
     after_audit_df = prepare_for_audit(after_df)
@@ -267,8 +354,8 @@ def summarize_cleaning_split(
         "missing_after": count_missing_values(after_audit_df),
         "duplicate_rows_before": int(before_audit_df.duplicated().sum()),
         "duplicate_rows_after": int(after_audit_df.duplicated().sum()),
-        "invalid_values_before": count_invalid_values(before_audit_df, target_column),
-        "invalid_values_after": count_invalid_values(after_audit_df, target_column),
+        "invalid_values_before": count_invalid_values(before_audit_df, target_column, minimum_valid_price),
+        "invalid_values_after": count_invalid_values(after_audit_df, target_column, minimum_valid_price),
         "date_processed": "date" in before_audit_df.columns,
         "sale_year_created": "sale_year" in after_df.columns,
         "sale_month_created": "sale_month" in after_df.columns,
@@ -290,13 +377,13 @@ def build_cleaning_steps_table() -> pd.DataFrame:
             },
             {
                 "step": "Outliers",
-                "phase_4_action": "Flag IQR outliers for price, sqft_living, bedrooms, bathrooms",
-                "reason": "House-price outliers can be valid luxury/location-driven homes",
+                "phase_4_action": "Flag IQR outliers for price, sqft_living, bedrooms, bathrooms; do not remove valid records",
+                "reason": "House-price outliers can be valid luxury/location-driven homes; their influence is controlled later with log target and L1/L2 regularization",
             },
             {
                 "step": "Invalid values",
-                "phase_4_action": "Set impossible feature values to NaN; remove non-positive target rows",
-                "reason": "Later preprocessing handles NaN consistently",
+                "phase_4_action": "Set impossible feature values to NaN; remove invalid target rows such as price <= 0 or price below the minimum valid threshold",
+                "reason": "Feature NaN can be imputed later, but invalid target values would teach the model impossible prices",
             },
             {
                 "step": "Remove unnecessary columns",
@@ -320,6 +407,7 @@ def build_cleaning_summary(
     val_clean_df: pd.DataFrame,
     test_clean_df: pd.DataFrame,
     target_column: str = "price",
+    minimum_valid_price: float = MINIMUM_VALID_PRICE,
 ) -> dict[str, pd.DataFrame]:
     split_frames = {
         "train": (train_df, train_clean_df),
@@ -328,13 +416,14 @@ def build_cleaning_summary(
     }
     audit_table = pd.DataFrame(
         [
-            summarize_cleaning_split(split, before_df, after_df, target_column)
+            summarize_cleaning_split(split, before_df, after_df, target_column, minimum_valid_price)
             for split, (before_df, after_df) in split_frames.items()
         ]
     )
     return {
         "cleaning_steps": build_cleaning_steps_table(),
         "audit_table": audit_table,
+        "price_validity_table": build_price_validity_table(split_frames, target_column, minimum_valid_price),
         "outlier_table": build_outlier_table(split_frames),
     }
 
@@ -344,12 +433,25 @@ def run_phase_4_data_cleaning(
     val_df: pd.DataFrame,
     test_df: pd.DataFrame,
     target_column: str = "price",
+    minimum_valid_price: float = MINIMUM_VALID_PRICE,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, dict[str, pd.DataFrame]]:
     """Clean each split independently without fitting transformers."""
 
-    train_clean_df = clean_house_data(train_df, target_column=target_column)
-    val_clean_df = clean_house_data(val_df, target_column=target_column)
-    test_clean_df = clean_house_data(test_df, target_column=target_column)
+    train_clean_df = clean_house_data(
+        train_df,
+        target_column=target_column,
+        minimum_valid_price=minimum_valid_price,
+    )
+    val_clean_df = clean_house_data(
+        val_df,
+        target_column=target_column,
+        minimum_valid_price=minimum_valid_price,
+    )
+    test_clean_df = clean_house_data(
+        test_df,
+        target_column=target_column,
+        minimum_valid_price=minimum_valid_price,
+    )
     cleaning_summary = build_cleaning_summary(
         train_df,
         val_df,
@@ -358,5 +460,6 @@ def run_phase_4_data_cleaning(
         val_clean_df,
         test_clean_df,
         target_column,
+        minimum_valid_price,
     )
     return train_clean_df, val_clean_df, test_clean_df, cleaning_summary

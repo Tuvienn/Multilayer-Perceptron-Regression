@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import math
-import numpy as np
+
 import pandas as pd
 from .table_display import style_colored_table as shared_style_colored_table
 from .phase_1_import_library import ProjectConfig
 
 
 try:
+    # pyrefly: ignore [missing-import]
     import torch
     from torch.utils.data import DataLoader
 except ModuleNotFoundError:

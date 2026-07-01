@@ -201,12 +201,63 @@ def build_feature_group_table(
             {
                 "feature_group": "Numerical",
                 "feature_count": len(numerical_features),
+                "meaning": "Cac cot dang so, duoc impute median va scale",
                 "example_features": ", ".join(numerical_features[:8]),
             },
             {
                 "feature_group": "Categorical",
                 "feature_count": len(categorical_features),
+                "meaning": "Cac cot dang nhom/ma danh muc, duoc impute mode va one-hot encode",
                 "example_features": ", ".join(categorical_features[:8]),
+            },
+        ]
+    )
+
+
+def count_processed_features_by_group(feature_names: list[str], group_name: str) -> int:
+    """Count transformed feature names produced by one ColumnTransformer branch."""
+
+    prefix = f"{group_name}__"
+    return sum(str(feature_name).startswith(prefix) for feature_name in feature_names)
+
+
+def build_feature_group_count_table(
+    numerical_features: list[str],
+    categorical_features: list[str],
+    feature_names: list[str],
+) -> pd.DataFrame:
+    """Count raw and processed features for each preprocessing group."""
+
+    numerical_processed_count = count_processed_features_by_group(feature_names, "numerical")
+    categorical_processed_count = count_processed_features_by_group(feature_names, "categorical")
+    known_processed_count = numerical_processed_count + categorical_processed_count
+    if feature_names and known_processed_count == 0:
+        numerical_processed_count = len(numerical_features)
+        categorical_processed_count = max(0, len(feature_names) - numerical_processed_count)
+    total_raw_count = len(numerical_features) + len(categorical_features)
+    total_processed_count = len(feature_names)
+    return pd.DataFrame(
+        [
+            {
+                "feature_group": "Numerical",
+                "raw_feature_count": len(numerical_features),
+                "processed_feature_count": numerical_processed_count,
+                "change_after_preprocessing": numerical_processed_count - len(numerical_features),
+                "reason": "Imputer/scaler khong tao them cot, chi bien doi gia tri",
+            },
+            {
+                "feature_group": "Categorical",
+                "raw_feature_count": len(categorical_features),
+                "processed_feature_count": categorical_processed_count,
+                "change_after_preprocessing": categorical_processed_count - len(categorical_features),
+                "reason": "One-Hot Encoding bien moi category thanh mot cot nhi phan",
+            },
+            {
+                "feature_group": "Total",
+                "raw_feature_count": total_raw_count,
+                "processed_feature_count": total_processed_count,
+                "change_after_preprocessing": total_processed_count - total_raw_count,
+                "reason": "Tong so cot dau vao cua MLP sau khi impute, scale va encode",
             },
         ]
     )
@@ -300,6 +351,11 @@ def build_phase_7_summary(
         "preprocessing_steps": build_preprocessing_steps_table(),
         "leakage_rules": build_leakage_rule_table(),
         "feature_groups": build_feature_group_table(numerical_features, categorical_features),
+        "feature_group_counts": build_feature_group_count_table(
+            numerical_features,
+            categorical_features,
+            feature_names,
+        ),
         "processed_shapes": build_processed_shape_table(
             X_train,
             X_val,
@@ -324,6 +380,7 @@ def display_phase_7_summary(summary: dict[str, pd.DataFrame]) -> None:
         ("### Preprocessing steps", "preprocessing_steps", "Phase 7 sklearn preprocessing steps"),
         ("### Data leakage rules", "leakage_rules", "Fit only on train, transform validation/test"),
         ("### Feature groups", "feature_groups", "Numerical and categorical feature groups"),
+        ("### Feature count after preprocessing", "feature_group_counts", "Feature count by group before and after preprocessing"),
         ("### Processed shapes", "processed_shapes", "Raw X shape vs processed array shape"),
         ("### Processed quality check", "processed_quality", "Numeric array quality after preprocessing"),
         ("### Saved artifacts", "artifacts", "Preprocessing artifact saved to output"),

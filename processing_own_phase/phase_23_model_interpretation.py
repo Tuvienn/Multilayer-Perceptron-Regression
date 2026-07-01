@@ -13,6 +13,9 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import torch
+from sklearn.inspection import permutation_importance
+from sklearn.metrics import mean_squared_error
 
 from .phase_1_import_library import ProjectConfig
 from .table_display import style_colored_table as shared_style_colored_table
@@ -101,6 +104,72 @@ def save_random_forest_feature_importance(
     return importance_df, _save_plot(plot_path)
 
 
+class MLPWrapper:
+    def __init__(self, model):
+        self.model = model
+        self.model.eval()
+        
+    def fit(self, X, y=None):
+        """Dummy fit method to satisfy sklearn's estimator validation."""
+        return self
+        
+    def predict(self, X):
+        X_tensor = torch.tensor(X, dtype=torch.float32)
+        with torch.no_grad():
+            preds = self.model(X_tensor)
+        return preds.cpu().numpy().ravel()
+
+
+def save_mlp_permutation_importance(
+    mlp_model,
+    test_loader,
+    feature_names: list[str],
+    config: ProjectConfig,
+    top_n: int = 25,
+) -> tuple[pd.DataFrame, Path]:
+    """Calculate and save permutation importance for MLP model."""
+    
+    # Extract data from test_loader
+    X_list, y_list = [], []
+    for X, y in test_loader:
+        X_list.append(X.cpu().numpy())
+        y_list.append(y.cpu().numpy())
+    X_test = np.vstack(X_list)
+    y_test = np.vstack(y_list).ravel()
+    
+    wrapper = MLPWrapper(mlp_model)
+    
+    def custom_scorer(estimator, X, y):
+        preds = estimator.predict(X)
+        return -mean_squared_error(y, preds)
+        
+    result = permutation_importance(
+        wrapper, X_test, y_test, scoring=custom_scorer, n_repeats=5, random_state=42
+    )
+    
+    importances = result.importances_mean
+    importance_df = pd.DataFrame(
+        {
+            "feature": feature_names,
+            "importance": importances,
+        }
+    ).sort_values("importance", ascending=False)
+
+    output_path = config.results_dir / "mlp_permutation_importance.csv"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    importance_df.to_csv(output_path, index=False)
+
+    top_features = importance_df.head(top_n).sort_values("importance")
+    plot_path = config.comparison_plots_dir / "mlp_permutation_importance.png"
+    plt.figure(figsize=(10, 8))
+    plt.barh(top_features["feature"], top_features["importance"], color="#0ea5e9")
+    plt.title("MLP Permutation Importance (Test Set)")
+    plt.xlabel("Permutation Importance (Increase in MSE)")
+    plt.ylabel("Feature")
+    plt.grid(True, axis="x", color="#cbd5e1", alpha=0.45)
+    return importance_df, _save_plot(plot_path)
+
+
 def build_residual_summary(predictions_df: pd.DataFrame) -> pd.DataFrame:
     """Build residual summary from MLP predictions."""
 
@@ -173,7 +242,7 @@ def build_interpretation_notes() -> pd.DataFrame:
         [
             {
                 "topic": "Why Random Forest importance",
-                "note": "MLP is harder to interpret directly, so Random Forest gives a useful feature-importance reference.",
+                "note": "MLP is harder to interpret directly, so Random Forest gives a useful feature-importance reference. In addition, MLP Permutation Importance measures how much the test MSE increases when a feature is shuffled randomly, offering direct insight into the MLP's learned logic.",
             },
             {
                 "topic": "Residual mean",
@@ -185,7 +254,7 @@ def build_interpretation_notes() -> pd.DataFrame:
             },
             {
                 "topic": "Important caution",
-                "note": "Feature importance from Random Forest explains the baseline model, not the exact inner logic of the MLP.",
+                "note": "Feature importance from Random Forest explains the baseline model. MLP Permutation Importance explains the exact MLP, though correlation between features can dilute permutation scores.",
             },
         ]
     )
@@ -193,24 +262,29 @@ def build_interpretation_notes() -> pd.DataFrame:
 
 def build_phase_23_summary(
     rf_importance_df: pd.DataFrame,
+    mlp_importance_df: pd.DataFrame | None,
     residual_summary_df: pd.DataFrame,
     error_by_segment_df: pd.DataFrame,
 ) -> dict[str, pd.DataFrame]:
     """Build display-ready Phase 23 summary tables."""
 
-    return {
-        "top_feature_importance": rf_importance_df.head(20).reset_index(drop=True),
+    summary = {
+        "top_feature_importance_rf": rf_importance_df.head(20).reset_index(drop=True),
         "residual_summary": residual_summary_df,
         "error_by_price_segment": error_by_segment_df,
         "interpretation_notes": build_interpretation_notes(),
     }
+    if mlp_importance_df is not None:
+        summary["top_feature_importance_mlp"] = mlp_importance_df.head(20).reset_index(drop=True)
+    return summary
 
 
 def display_phase_23_summary(summary: dict[str, pd.DataFrame]) -> None:
     """Display Phase 23 summary tables in a notebook, with a plain fallback."""
 
     sections = [
-        ("### Top Random Forest feature importance", "top_feature_importance", "Top feature importance reference"),
+        ("### Top Random Forest feature importance", "top_feature_importance_rf", "Top feature importance reference (Random Forest)"),
+        ("### Top MLP Permutation Importance", "top_feature_importance_mlp", "Top Permutation Importance (MLP)"),
         ("### Residual summary", "residual_summary", "MLP residual summary"),
         ("### Error by price segment", "error_by_price_segment", "MLP error by actual price segment"),
         ("### Interpretation notes", "interpretation_notes", "How to read Phase 23 outputs"),
@@ -219,11 +293,14 @@ def display_phase_23_summary(summary: dict[str, pd.DataFrame]) -> None:
         from IPython.display import Markdown, display
     except ModuleNotFoundError:
         for title, key, _caption in sections:
-            print(title.replace("#", "").strip())
-            print(summary[key])
+            if key in summary:
+                print(title.replace("#", "").strip())
+                print(summary[key])
         return
 
     for title, key, caption in sections:
+        if key not in summary:
+            continue
         display(Markdown(title))
         gradient_columns = [
             column
@@ -238,6 +315,8 @@ def run_phase_23_model_interpretation(
     feature_names: list[str],
     predictions_df: pd.DataFrame,
     config: ProjectConfig,
+    mlp_model=None,
+    test_loader=None,
     random_forest_key: str = "Random Forest Regression",
 ) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, pd.DataFrame], dict[str, Path]]:
     """Run Phase 23 interpretation helpers."""
@@ -251,13 +330,29 @@ def run_phase_23_model_interpretation(
         feature_names=feature_names,
         config=config,
     )
+    
+    mlp_importance_df = None
+    mlp_importance_plot = None
+    if mlp_model is not None and test_loader is not None:
+        mlp_importance_df, mlp_importance_plot = save_mlp_permutation_importance(
+            mlp_model=mlp_model,
+            test_loader=test_loader,
+            feature_names=feature_names,
+            config=config,
+        )
+        
     residual_summary_df = save_residual_summary(predictions_df, config)
     error_by_segment_df = save_error_by_price_segment(predictions_df, config)
-    summary = build_phase_23_summary(rf_importance_df, residual_summary_df, error_by_segment_df)
+    summary = build_phase_23_summary(rf_importance_df, mlp_importance_df, residual_summary_df, error_by_segment_df)
+    
     output_paths = {
         "random_forest_feature_importance_csv": config.results_dir / "random_forest_feature_importance.csv",
         "random_forest_feature_importance_plot": rf_importance_plot,
         "residual_summary": config.results_dir / "residual_summary.csv",
         "error_by_price_segment": config.results_dir / "error_by_price_segment.csv",
     }
+    if mlp_importance_plot is not None:
+        output_paths["mlp_permutation_importance_csv"] = config.results_dir / "mlp_permutation_importance.csv"
+        output_paths["mlp_permutation_importance_plot"] = mlp_importance_plot
+        
     return rf_importance_df, residual_summary_df, summary, output_paths

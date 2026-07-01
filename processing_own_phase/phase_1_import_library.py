@@ -52,18 +52,21 @@ class ProjectConfig:
     validation_ratio: float = 0.10
     test_ratio: float = 0.10
     target_column: str = "price"
-    batch_size: int = 128
+    batch_size: int = 64
     epochs: int = 150
-    learning_rate: float = 1e-3
-    hidden_units: tuple[int, ...] = (128, 64)
-    dropout: float = 0.10
-    weight_decay: float = 1e-5
+    learning_rate: float = 5e-4
+    hidden_units: tuple[int, ...] = (64,)
+    dropout: float = 0.0
+    weight_decay: float = 0.0
+    l1_lambda: float = 1e-6
     loss_function: str = "mse"
     huber_delta: float = 1.0
-    gradient_clip_norm: float | None = None
+    gradient_clip_norm: float | None = 5.0
     patience: int = 15
     min_delta: float = 1e-4
     log_transform_target: bool = True
+    minimum_valid_price: float = 10_000.0
+    prediction_guardrail_multiplier: float = 3.0
 
     def validate(self) -> None:
         """Validate configuration values before the pipeline uses them."""
@@ -77,6 +80,12 @@ class ProjectConfig:
             raise ValueError("epochs must be positive")
         if self.learning_rate <= 0:
             raise ValueError("learning_rate must be positive")
+        if self.l1_lambda < 0:
+            raise ValueError("l1_lambda must be non-negative")
+        if self.minimum_valid_price <= 0:
+            raise ValueError("minimum_valid_price must be positive")
+        if self.prediction_guardrail_multiplier <= 1:
+            raise ValueError("prediction_guardrail_multiplier must be greater than 1")
         if self.loss_function not in {"mse", "huber", "smooth_l1"}:
             raise ValueError("loss_function must be one of: mse, huber, smooth_l1")
         if self.huber_delta <= 0:
@@ -285,6 +294,9 @@ def build_phase_1_html(config: ProjectConfig) -> str:
         ("Learning rate", config.learning_rate),
         ("Hidden units", config.hidden_units),
         ("Dropout", config.dropout),
+        ("L1 lambda", config.l1_lambda),
+        ("Loss function", config.loss_function),
+        ("Minimum valid price", config.minimum_valid_price),
         ("Patience", config.patience),
     ]
     library_status = check_library_status()

@@ -19,10 +19,13 @@
   ],
   "dropout": 0.0,
   "weight_decay": 0.0,
+  "l1_lambda": 1e-06,
   "loss_function": "mse",
   "huber_delta": 1.0,
   "gradient_clip_norm": 5.0,
   "patience": 15,
   "min_delta": 0.0001,
-  "log_transform_target": true
+  "log_transform_target": true,
+  "minimum_valid_price": 10000.0,
+  "prediction_guardrail_multiplier": 3.0
 }

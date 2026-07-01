@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 
-import numpy as np
+
 import pandas as pd
 
 from .table_display import style_colored_table as shared_style_colored_table
@@ -54,6 +54,7 @@ class ModelHyperparameters:
     hidden_units: tuple[int, ...]
     dropout: float
     weight_decay: float
+    l1_lambda: float
     patience: int
     min_delta: float
     loss_function: str = "mse"
@@ -91,6 +92,7 @@ def get_model_hyperparameters(config: ProjectConfig) -> ModelHyperparameters:
         hidden_units=config.hidden_units,
         dropout=config.dropout,
         weight_decay=config.weight_decay,
+        l1_lambda=config.l1_lambda,
         loss_function=config.loss_function,
         huber_delta=config.huber_delta,
         gradient_clip_norm=config.gradient_clip_norm,
@@ -117,6 +119,7 @@ def build_hyperparameter_table(hyperparameters: ModelHyperparameters) -> pd.Data
         "hidden_units": "MLP hidden layer sizes",
         "dropout": "Dropout rate to reduce overfitting",
         "weight_decay": "L2 regularization strength",
+        "l1_lambda": "L1 regularization strength added to the training loss",
         "loss_function": "Regression objective: mse, huber or smooth_l1",
         "huber_delta": "Huber/SmoothL1 transition point for robust regression",
         "gradient_clip_norm": "Optional max gradient norm for stable neural network training",
@@ -147,12 +150,46 @@ def build_training_component_table(device: str) -> pd.DataFrame:
             {
                 "component": "optimizer",
                 "value": "torch.optim.Adam()",
-                "purpose": "Update weights using adaptive learning rates",
+                "purpose": "Update weights using adaptive learning rates and L2 weight_decay",
+            },
+            {
+                "component": "regularization",
+                "value": "L1 penalty + L2 weight_decay",
+                "purpose": "Reduce overfitting and limit the influence of extreme outlier observations",
             },
             {
                 "component": "tracked_metrics",
                 "value": "MAE, MSE, RMSE, R2",
                 "purpose": "Monitor training and validation behavior",
+            },
+        ]
+    )
+
+
+def build_regularization_strategy_table(hyperparameters: ModelHyperparameters) -> pd.DataFrame:
+    """Explain how L1/L2 regularization is used for outlier-sensitive training."""
+
+    return pd.DataFrame(
+        [
+            {
+                "item": "Outlier policy",
+                "value": "Flag, analyze, and keep valid house-price outliers",
+                "reason": "Very expensive houses may be legitimate observations, not data errors",
+            },
+            {
+                "item": "L1 regularization",
+                "value": f"l1_lambda = {hyperparameters.l1_lambda}",
+                "reason": "Adds absolute-weight penalty to discourage overly complex weights",
+            },
+            {
+                "item": "L2 regularization",
+                "value": f"weight_decay = {hyperparameters.weight_decay}",
+                "reason": "Penalizes large weights through Adam weight decay",
+            },
+            {
+                "item": "Target transform",
+                "value": "log1p(price)",
+                "reason": "Compresses the right-skewed target before model training",
             },
         ]
     )
@@ -168,6 +205,7 @@ def build_phase_12_summary(
     return {
         "hyperparameters": build_hyperparameter_table(hyperparameters),
         "training_components": build_training_component_table(selected_device),
+        "regularization_strategy": build_regularization_strategy_table(hyperparameters),
     }
 
 
@@ -177,6 +215,7 @@ def display_phase_12_summary(summary: dict[str, pd.DataFrame]) -> None:
     sections = [
         ("### Hyperparameters", "hyperparameters", "Model hyperparameters from ProjectConfig"),
         ("### Training components", "training_components", "Device, loss, optimizer and metrics"),
+        ("### Regularization strategy", "regularization_strategy", "L1/L2 strategy for outlier-sensitive training"),
     ]
     try:
         from IPython.display import Markdown, display

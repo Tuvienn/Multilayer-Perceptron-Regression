@@ -117,6 +117,23 @@ def create_regression_loss(hyperparameters):
     raise ValueError("loss_function must be one of: mse, huber, smooth_l1")
 
 
+def calculate_l1_penalty(model, l1_lambda: float):
+    """Calculate L1 penalty over trainable model parameters."""
+
+    if l1_lambda <= 0:
+        return 0.0
+    torch_module, _nn_module = require_torch_training()
+    penalty = None
+    for parameter in model.parameters():
+        if not parameter.requires_grad:
+            continue
+        parameter_penalty = parameter.abs().sum()
+        penalty = parameter_penalty if penalty is None else penalty + parameter_penalty
+    if penalty is None:
+        return torch_module.tensor(0.0)
+    return l1_lambda * penalty
+
+
 def evaluate_loader(model, data_loader, criterion, device) -> tuple[float, dict[str, float]]:
     """Evaluate model without updating gradients."""
 
@@ -146,6 +163,7 @@ def train_one_epoch(
     optimizer,
     device,
     gradient_clip_norm: float | None = None,
+    l1_lambda: float = 0.0,
 ) -> tuple[float, dict[str, float], float]:
     """Train one epoch and return loss, metrics, and average gradient norm."""
 
@@ -161,7 +179,9 @@ def train_one_epoch(
         y_batch = y_batch.to(device)
         optimizer.zero_grad()
         output = model(X_batch)
-        loss = criterion(output, y_batch)
+        base_loss = criterion(output, y_batch)
+        l1_penalty = calculate_l1_penalty(model, l1_lambda)
+        loss = base_loss + l1_penalty
         loss.backward()
         if gradient_clip_norm is not None:
             total_norm = torch_module.nn.utils.clip_grad_norm_(model.parameters(), gradient_clip_norm)
@@ -199,6 +219,7 @@ def train_mlp_pytorch(
     model.to(selected_device)
     criterion, loss_function, huber_delta = create_regression_loss(hyperparameters)
     gradient_clip_norm = get_hyperparameter_value(hyperparameters, "gradient_clip_norm", None)
+    l1_lambda = float(get_hyperparameter_value(hyperparameters, "l1_lambda", 0.0))
     optimizer = torch_module.optim.Adam(
         model.parameters(),
         lr=hyperparameters.learning_rate,
@@ -216,6 +237,7 @@ def train_mlp_pytorch(
             optimizer,
             selected_device,
             gradient_clip_norm=gradient_clip_norm,
+            l1_lambda=l1_lambda,
         )
         val_loss, val_metrics = evaluate_loader(model, val_loader, criterion, selected_device)
         epoch_time = time.perf_counter() - start_time
@@ -232,6 +254,7 @@ def train_mlp_pytorch(
             "validation_rmse": val_metrics["rmse"],
             "validation_r2": val_metrics["r2"],
             "learning_rate": hyperparameters.learning_rate,
+            "l1_lambda": l1_lambda,
             "loss_function": loss_function,
             "huber_delta": huber_delta,
             "gradient_clip_norm": gradient_clip_norm,
@@ -262,6 +285,7 @@ def build_training_process_table() -> pd.DataFrame:
             {"step": "model.train()", "purpose": "Enable training behavior such as dropout"},
             {"step": "forward pass", "purpose": "Predict y for each batch"},
             {"step": "loss = configured_loss(output, y)", "purpose": "Measure regression error with MSE or a robust loss"},
+            {"step": "optional L1 penalty", "purpose": "Add L1 regularization to reduce sensitivity to extreme observations"},
             {"step": "optimizer.zero_grad()", "purpose": "Clear old gradients"},
             {"step": "loss.backward()", "purpose": "Compute gradients"},
             {"step": "optional gradient clipping", "purpose": "Limit gradient norm when configured for robust-loss trials"},

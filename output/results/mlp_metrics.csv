@@ -1,2 +1,2 @@
-model,MAE,MSE,RMSE,R2,training_time_seconds,inference_time_seconds,target_scale,device
-MLP Regression PyTorch,99151.51387556073,93745115448.48979,306178.2413047828,0.5667416965320384,5.242656375397928,0.005547583103179932,original price scale after expm1 inverse transform,cpu
+model,MAE,MSE,RMSE,R2,training_time_seconds,inference_time_seconds,inference_time_mean_seconds,inference_time_std_seconds,inference_time_repeats,target_scale,device
+MLP Regression PyTorch,89142.04555271188,83836624015.04959,289545.5473928922,0.6121812320984037,8.458318917779252,0.006486416631378234,0.006486416631378234,0.006887052918676161,30,original price scale after expm1 inverse transform,cpu

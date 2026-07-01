@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import numpy as np
+
 import pandas as pd
 
 from .table_display import style_colored_table as shared_style_colored_table

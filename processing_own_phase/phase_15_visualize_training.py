@@ -71,6 +71,14 @@ def _base_training_plot(title: str, ylabel: str) -> None:
     plt.grid(True, color=PLOT_STYLE["grid"], alpha=0.45, linewidth=0.8)
 
 
+def target_loss_scale_label(config: ProjectConfig) -> str:
+    """Return the target scale wording used in training-loss plots."""
+
+    if getattr(config, "log_transform_target", False):
+        return "log-transformed target"
+    return "target"
+
+
 def plot_two_metric_curve(
     training_log: pd.DataFrame,
     columns: tuple[str, str],
@@ -167,8 +175,8 @@ def build_training_plot_paths(
     plot_paths["training_loss_curve"] = plot_two_metric_curve(
         training_log,
         ("train_loss", "validation_loss"),
-        "Train Loss vs Validation Loss",
-        "MSE Loss",
+        f"Train vs Validation MSE Loss on {target_loss_scale_label(config)}",
+        f"MSE Loss on {target_loss_scale_label(config)}",
         config.training_plots_dir / "training_loss_curve.png",
     )
     plot_paths["mae_curve"] = plot_two_metric_curve(

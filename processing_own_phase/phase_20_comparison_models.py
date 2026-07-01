@@ -16,6 +16,9 @@ from .phase_18_evaluate_mlp import regression_metrics
 from .table_display import style_colored_table as shared_style_colored_table
 
 
+DEFAULT_INFERENCE_REPEATS = 30
+
+
 def style_colored_table(
     df: pd.DataFrame,
     caption: str,
@@ -76,11 +79,39 @@ def build_baseline_rule_table() -> pd.DataFrame:
             },
             {
                 "rule": "Same metrics",
-                "phase_20_action": "Report MAE, MSE, RMSE, R2, training time and inference time",
-                "reason": "Compare both accuracy and cost",
+                "phase_20_action": "Report MAE, MSE, RMSE, R2, training time and mean inference time",
+                "reason": "Compare both accuracy and cost using repeated predict timing",
             },
         ]
     )
+
+
+def validate_inference_repeats(n_repeats: int) -> int:
+    repeats = int(n_repeats)
+    if repeats <= 0:
+        raise ValueError("n_repeats must be a positive integer for inference timing.")
+    return repeats
+
+
+def measure_predict_time(model, X_test, n_repeats: int = DEFAULT_INFERENCE_REPEATS) -> tuple[np.ndarray, float, float]:
+    """Run model.predict repeatedly on the same test set and return prediction timing stats."""
+
+    repeats = validate_inference_repeats(n_repeats)
+    timings: list[float] = []
+    y_pred: np.ndarray | None = None
+    for _ in range(repeats):
+        inference_start = time.perf_counter()
+        current_pred = model.predict(X_test)
+        timings.append(time.perf_counter() - inference_start)
+        if y_pred is None:
+            y_pred = np.asarray(current_pred)
+
+    timing_array = np.asarray(timings, dtype=float)
+    inference_time_mean = float(timing_array.mean())
+    inference_time_std = float(timing_array.std(ddof=1)) if repeats > 1 else 0.0
+    if y_pred is None:
+        raise RuntimeError("No predictions were produced during baseline inference timing.")
+    return y_pred, inference_time_mean, inference_time_std
 
 
 def build_model_description_table() -> pd.DataFrame:
@@ -147,6 +178,7 @@ def run_phase_20_comparison_models(
     y_test,
     config: ProjectConfig,
     inverse_transform: Callable | None = None,
+    n_repeats: int = DEFAULT_INFERENCE_REPEATS,
 ) -> tuple[pd.DataFrame, dict[str, object], dict[str, pd.DataFrame]]:
     """Train baseline regressors and evaluate them on the test set."""
 
@@ -161,9 +193,11 @@ def run_phase_20_comparison_models(
         model.fit(X_train, y_train_array)
         training_time = time.perf_counter() - train_start
 
-        inference_start = time.perf_counter()
-        y_pred = model.predict(X_test)
-        inference_time = time.perf_counter() - inference_start
+        y_pred, inference_time_mean, inference_time_std = measure_predict_time(
+            model,
+            X_test,
+            n_repeats=n_repeats,
+        )
 
         metric_y_true = y_test_array
         metric_y_pred = y_pred
@@ -176,7 +210,10 @@ def run_phase_20_comparison_models(
                 "model": model_name,
                 **regression_metrics(metric_y_true, metric_y_pred),
                 "training_time_seconds": training_time,
-                "inference_time_seconds": inference_time,
+                "inference_time_seconds": inference_time_mean,
+                "inference_time_mean_seconds": inference_time_mean,
+                "inference_time_std_seconds": inference_time_std,
+                "inference_time_repeats": int(n_repeats),
                 "target_scale": "original price scale after inverse transform" if inverse_transform is not None else "model target scale",
             }
         )

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from pathlib import Path
+
 from typing import Any, Callable
 
 import numpy as np
@@ -19,6 +19,9 @@ except ModuleNotFoundError:
     torch = None
 
 
+DEFAULT_INFERENCE_REPEATS = 30
+
+
 def require_torch_evaluation():
     """Return torch or raise a helpful setup error."""
 
@@ -28,6 +31,29 @@ def require_torch_evaluation():
             "Use the Jupyter kernel that has torch installed, then restart and rerun the notebook."
         )
     return torch
+
+
+def validate_inference_repeats(n_repeats: int) -> int:
+    repeats = int(n_repeats)
+    if repeats <= 0:
+        raise ValueError("n_repeats must be a positive integer for inference timing.")
+    return repeats
+
+
+def synchronize_device(torch_module, selected_device) -> None:
+    if getattr(selected_device, "type", None) == "cuda" and torch_module.cuda.is_available():
+        torch_module.cuda.synchronize(selected_device)
+
+
+def predict_loader_once(model, test_loader, selected_device, torch_module) -> tuple[np.ndarray, np.ndarray]:
+    predictions: list[np.ndarray] = []
+    targets: list[np.ndarray] = []
+    with torch_module.no_grad():
+        for X_batch, y_batch in test_loader:
+            output = model(X_batch.to(selected_device))
+            predictions.append(output.detach().cpu().numpy())
+            targets.append(y_batch.detach().cpu().numpy())
+    return np.vstack(targets).reshape(-1), np.vstack(predictions).reshape(-1)
 
 
 def style_colored_table(
@@ -62,23 +88,56 @@ def regression_metrics(y_true, y_pred) -> dict[str, float]:
     return {"MAE": mae, "MSE": mse, "RMSE": rmse, "R2": r2}
 
 
-def predict_mlp(model, test_loader, device: str | Any | None = None) -> tuple[np.ndarray, np.ndarray, float, str]:
-    """Predict with the MLP model and return targets, predictions, inference time and device."""
+def predict_mlp_with_timing_details(
+    model,
+    test_loader,
+    device: str | Any | None = None,
+    n_repeats: int = DEFAULT_INFERENCE_REPEATS,
+) -> tuple[np.ndarray, np.ndarray, float, float, str]:
+    """Predict repeatedly and return targets, predictions, mean/std inference time and device."""
 
     torch_module = require_torch_evaluation()
+    repeats = validate_inference_repeats(n_repeats)
     selected_device = torch_module.device(device or ("cuda" if torch_module.cuda.is_available() else "cpu"))
     model.to(selected_device)
     model.eval()
-    predictions: list[np.ndarray] = []
-    targets: list[np.ndarray] = []
-    inference_start = time.perf_counter()
-    with torch_module.no_grad():
-        for X_batch, y_batch in test_loader:
-            output = model(X_batch.to(selected_device))
-            predictions.append(output.detach().cpu().numpy())
-            targets.append(y_batch.detach().cpu().numpy())
-    inference_time = time.perf_counter() - inference_start
-    return np.vstack(targets).reshape(-1), np.vstack(predictions).reshape(-1), inference_time, str(selected_device)
+
+    timings: list[float] = []
+    first_y_true: np.ndarray | None = None
+    first_y_pred: np.ndarray | None = None
+    for repeat_index in range(repeats):
+        synchronize_device(torch_module, selected_device)
+        inference_start = time.perf_counter()
+        y_true, y_pred = predict_loader_once(model, test_loader, selected_device, torch_module)
+        synchronize_device(torch_module, selected_device)
+        timings.append(time.perf_counter() - inference_start)
+        if repeat_index == 0:
+            first_y_true = y_true
+            first_y_pred = y_pred
+
+    timing_array = np.asarray(timings, dtype=float)
+    inference_time_mean = float(timing_array.mean())
+    inference_time_std = float(timing_array.std(ddof=1)) if repeats > 1 else 0.0
+    if first_y_true is None or first_y_pred is None:
+        raise RuntimeError("No predictions were produced during MLP inference timing.")
+    return first_y_true, first_y_pred, inference_time_mean, inference_time_std, str(selected_device)
+
+
+def predict_mlp(
+    model,
+    test_loader,
+    device: str | Any | None = None,
+    n_repeats: int = DEFAULT_INFERENCE_REPEATS,
+) -> tuple[np.ndarray, np.ndarray, float, str]:
+    """Predict with the MLP model and return targets, predictions, mean inference time and device."""
+
+    y_true, y_pred, inference_time_mean, _inference_time_std, selected_device = predict_mlp_with_timing_details(
+        model,
+        test_loader,
+        device=device,
+        n_repeats=n_repeats,
+    )
+    return y_true, y_pred, inference_time_mean, selected_device
 
 
 def build_predictions_dataframe(y_true, y_pred) -> pd.DataFrame:
@@ -176,10 +235,15 @@ def run_phase_18_evaluate_mlp(
     test_loader,
     config: ProjectConfig,
     inverse_transform: Callable | None = None,
+    n_repeats: int = DEFAULT_INFERENCE_REPEATS,
 ) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, pd.DataFrame]]:
     """Run Phase 18 MLP evaluation on the test set."""
 
-    y_true, y_pred, inference_time, device = predict_mlp(model, test_loader)
+    y_true, y_pred, inference_time_mean, inference_time_std, device = predict_mlp_with_timing_details(
+        model,
+        test_loader,
+        n_repeats=n_repeats,
+    )
     target_scale = "model target scale"
     if inverse_transform is not None:
         y_true = inverse_transform(y_true)
@@ -191,7 +255,10 @@ def run_phase_18_evaluate_mlp(
                 "model": "MLP Regression PyTorch",
                 **regression_metrics(y_true, y_pred),
                 "training_time_seconds": pd.NA,
-                "inference_time_seconds": inference_time,
+                "inference_time_seconds": inference_time_mean,
+                "inference_time_mean_seconds": inference_time_mean,
+                "inference_time_std_seconds": inference_time_std,
+                "inference_time_repeats": int(n_repeats),
                 "target_scale": target_scale,
                 "device": device,
             }

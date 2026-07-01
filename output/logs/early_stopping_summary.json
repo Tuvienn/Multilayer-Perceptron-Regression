@@ -1,6 +1,6 @@
 {
-  "best_loss": 0.06824777285967554,
-  "best_epoch": 34,
+  "best_loss": 0.06416295025763767,
+  "best_epoch": 60,
   "patience": 15,
   "min_delta": 0.0001,
   "counter": 15,
